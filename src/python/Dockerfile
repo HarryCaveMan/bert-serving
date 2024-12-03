@@ -1,0 +1,63 @@
+FROM amazonlinux:2023 as cuda_plugins
+
+RUN dnf -y update && dnf -y upgrade && dnf -y install python3.11 python3.11-pip \
+    &&\
+    pip3.11 install \
+    nvidia-nccl-cu12 \
+    nvidia-cudnn-cu12
+
+FROM amazonlinux:2023 as cuda_base
+
+RUN dnf -y update && dnf -y upgrade &&\
+    dnf -y install 'dnf-command(config-manager)' &&\
+    dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/amzn2023/x86_64/cuda-amzn2023.repo &&\
+    dnf -y update && dnf -y install cuda-toolkit &&\
+    dnf -y install python3.11 python3.11-setuptools python3.11-devel &&\
+    ln /usr/bin/python3.11 /usr/bin/python
+
+ENV CUDA_ROOT=/usr/local/cuda
+ENV CUDA_INCLUDE_PATH=$CUDA_ROOT/include
+ENV CUDA_LIBRARY_PATH=$CUDA_ROOT/lib64
+ENV CUDA_BIN=$CUDA_ROOT/bin
+ENV PATH=$CUDA_BIN:$PATH
+ENV LD_LIBRARY_PATH=$CUDA_LIBRARY_PATH:$LD_LIBRARY_PATH
+ENV C_INCLUDE_PATH=$CUDA_INCLUDE_PATH:$C_INCLUDE_PATH
+ENV CPLUS_INCLUDE_PATH=$CUDA_INCLUDE_PATH:$CPLUS_INCLUDE_PATH
+
+COPY --from=cuda_plugins /usr/local/lib/python3.11/site-packages/nvidia/nccl/lib/* $CUDA_LIBRARY_PATH
+COPY --from=cuda_plugins /usr/local/lib/python3.11/site-packages/nvidia/cudnn/lib/* $CUDA_LIBRARY_PATH
+COPY --from=cuda_plugins /usr/local/lib/python3.11/site-packages/nvidia/nccl/include/* $CUDA_INCLUDE_PATH
+COPY --from=cuda_plugins /usr/local/lib/python3.11/site-packages/nvidia/cudnn/include/* $CUDA_INCLUDE_PATH
+
+FROM cuda_base as build
+
+ENV CXXFLAGS="-I$CUDA_INCLUDE_PATH -L$CUDA_LIBRARY_PATH"
+ENV MAKEFLAGS="-j4"
+
+RUN dnf -y install \
+        gcc \
+        g++ \
+        make \
+        automake \
+        autoconf \
+        cmake \
+        python3.11-pip \
+    &&\
+    ln /usr/bin/pip3.11 /usr/bin/pip &&\
+    python -m venv /opt/runtime
+
+ENV PATH=/opt/runtime/bin:$PATH
+
+COPY requirements.txt .
+
+RUN pip install --no-cache -r requirements.txt
+RUN pip install --no-cache pycuda
+
+FROM cuda_base
+# activate virtualenv from build
+COPY --from=build /opt/runtime /opt/runtime
+ENV PATH=/opt/runtime/bin:$PATH
+
+COPY . /opt/service
+
+ENTRYPOINT ["/bin/bash"]
