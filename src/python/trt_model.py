@@ -8,7 +8,6 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from itertools import cycle
-from copy import deepcopy
 
 class HostDeviceMem:
     def __init__(self, host_mem, device_mem, shape):
@@ -17,7 +16,7 @@ class HostDeviceMem:
         self.device = device_mem
         # keeping track of shape to un-flatten it later
         self.shape = shape
-        
+
 
 class IOBufferSet:
     def __init__(self,inputs,outputs,bindings,stream,thread_pool) -> None:
@@ -29,17 +28,17 @@ class IOBufferSet:
         self.output = outputs
         self.bindings = bindings
         self.stream = stream
-        self._free = True
+        self._taints = 0
 
     def taint(self) -> None:
-        self._free = False
+        self._taints += 1
 
-    def release(self) -> None:
-        self._free = True
+    def clean(self) -> None:
+        self._taints -= 1
 
     @property
     def idle(self) -> bool:
-        return self._free
+        return self._taints == 0
 
     async def sync_cuda_event(self,event) -> None:
         await self._loop.run_in_executor(
@@ -82,7 +81,7 @@ class IOBufferSet:
         outputs = []
         try:
             for host_device_output in self.outputs:
-                output = deepcopy(host_device_output.host)  # This is a NumPy ndarray
+                output = np.copy(host_device_output.host)  # This is a NumPy ndarray
                 output = output.reshape(host_device_output.shape)  # Reshape to original tensor shape
                 outputs.append(output)            
             return outputs
@@ -119,12 +118,18 @@ class TRTContextWithStreamAndBuffers:
     async def execute(self,input_data) -> np.ndarray:
         completion_event = cuda.Event()
         buffers = self.get_io_buffers()
+        buffers.taint()
         await buffers.push_one(input_data)
-        self._trt_context.enqueue_v3(buffers.stream.handle,buffers.bindings)
+        self._trt_context.enqueue_v3(
+            buffers.stream.handle,
+            buffers.bindings
+        )
         await buffers.begin_read()
         buffers.dtoh_async()
         completion_event.record(self.stream)
-        return await buffers.pull(completion_event)
+        model_output = await buffers.pull(completion_event)
+        buffers.clean()
+        return model_output
   
     @property
     def idle(self):
@@ -143,7 +148,10 @@ class TRTExecPool:
     def __init__(self,engine,num_cuda_streams,num_buffers_per_stream) -> None:
         self._guard = asyncio.Semaphore(num_cuda_streams)
         self._execution_contexts = (
-            TRTContextWithStreamAndBuffers(engine,num_buffers_per_stream)
+            TRTContextWithStreamAndBuffers(
+                engine,
+                num_buffers_per_stream
+            )
             for i in range(num_cuda_streams)
         )
     
@@ -172,7 +180,11 @@ class TRTModel:
         self._runtime = trt.Runtime(self._logger)
         self.load_engine(model_path)
         self.load_tokenizer(model_path)
-        self._exec_pool = TRTExecPool(self._trt_engine,num_cuda_streams,io_buffer_sets_per_stream)
+        self._exec_pool = TRTExecPool(
+            self._trt_engine,
+            num_cuda_streams,
+            io_buffer_sets_per_stream
+        )
 
     async def predict(self,input_data):
         executor = self._exec_pool.get_execution_context()
