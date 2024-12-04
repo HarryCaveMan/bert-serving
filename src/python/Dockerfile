@@ -16,6 +16,7 @@ RUN dnf -y update && dnf -y upgrade &&\
     ln /usr/bin/python3.11 /usr/bin/python
 
 ENV CUDA_ROOT=/usr/local/cuda
+ENV CUDA_HOME=$CUDA_ROOT
 ENV CUDA_INCLUDE_PATH=$CUDA_ROOT/include
 ENV CUDA_LIBRARY_PATH=$CUDA_ROOT/lib64
 ENV CUDA_BIN=$CUDA_ROOT/bin
