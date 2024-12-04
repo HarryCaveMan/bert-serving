@@ -43,7 +43,7 @@ class IOBufferSet:
         self._input_guard = asyncio.Lock()
         self._output_guard = asyncio.Lock()
         self.inputs = inputs
-        self.output = outputs
+        self.outputs = outputs
         self.bindings = bindings
         self.stream = stream
         self._taints = 0
@@ -93,7 +93,7 @@ class IOBufferSet:
         async with self._input_guard:
             np.copyto(self.inputs[input_index].host, input_data.ravel())
             self.htod_async(input_index)
-            self.stream.record(write_event)
+            self.stream.record(htpd_event)
             await self.sync_cuda_event(htod_event)
 
     async def pull(self,event) -> np.ndarray:
