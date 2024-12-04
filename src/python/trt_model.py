@@ -94,7 +94,7 @@ class TRTContextWithStreamAndBuffers:
         inputs,outputs,bindings = [],[],[]
         for binding_index in range(self._trt_context.engine.num_bindings):
             binding_name = self._trt_context.engine.get_binding_name(binding_index)
-            shape = self._trt_context.get_binding_shape(binding_name)
+            shape = self._trt_context.engine.get_binding_shape(binding_name)
             size = trt.volume(shape)
             dtype = trt.nptype(self._trt_context.engine.get_binding_dtype(binding_name))
             host_mem = cuda.pagelocked_empty(size, dtype)
