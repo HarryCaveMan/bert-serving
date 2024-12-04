@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import asyncio
 
-from cuda_asyncio import HostDeviceMem,IOBufferSet
+from cuda_asyncio import HostDeviceMem,IOBufferSet,allocate_buffers
 
 class TRTContextWithStreamAndBuffers:
     def __init__(self,engine,num_buffer_sets) -> None:
@@ -17,24 +17,7 @@ class TRTContextWithStreamAndBuffers:
         self._output_guard = asyncio.Lock()
         self._trt_context = engine.create_execution_context()
         self.stream = cuda.Stream()
-        self._buffer_pool = tuple(self.allocate_buffers() for i in range(num_buffer_sets))
-
-    def allocate_buffers(self):
-        inputs,outputs,bindings = [],[],[]
-        for binding_index in range(self._trt_context.engine.num_bindings):
-            binding_name = self._trt_context.engine.get_binding_name(binding_index)
-            shape = self._trt_context.engine.get_binding_shape(binding_name)
-            size = trt.volume(shape)
-            dtype = trt.nptype(self._trt_context.engine.get_binding_dtype(binding_name))
-            host_mem = cuda.pagelocked_empty(size, dtype)
-            device_mem = cuda.mem_alloc(host_mem.nbytes)
-            bindings.append(int(device_mem))
-            mem_obj = HostDeviceMem(host_mem, device_mem, shape)
-            if self._trt_context.engine.binding_is_input(binding_name):
-                inputs.append(mem_obj)
-            else:
-                outputs.append(mem_obj)
-        return IOBufferSet(inputs,outputs,bindings,self.stream,self._io_thread_pool)
+        self._buffer_pool = tuple(self.allocate_buffers(self) for i in range(num_buffer_sets))
 
     def get_io_buffers(self) -> IOBufferSet:
         return next(

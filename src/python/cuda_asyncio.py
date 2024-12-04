@@ -4,6 +4,29 @@ import pycuda.autoinit
 import tensorrt as trt
 import asyncio
 
+def allocate_buffers(context_wrapper):
+    inputs,outputs,bindings = [],[],[]
+    for binding_index in range(context_wrapper._trt_context.engine.num_bindings):
+        binding_name = context_wrapper._trt_context.engine.get_binding_name(binding_index)
+        shape = context_wrapper._trt_context.engine.get_binding_shape(binding_name)
+        size = trt.volume(shape)
+        dtype = trt.nptype(context_wrapper._trt_context.engine.get_binding_dtype(binding_name))
+        host_mem = cuda.pagelocked_empty(size, dtype)
+        device_mem = cuda.mem_alloc(host_mem.nbytes)
+        bindings.append(int(device_mem))
+        mem_obj = HostDeviceMem(host_mem, device_mem, shape)
+        if context_wrapper._trt_context.engine.binding_is_input(binding_name):
+            inputs.append(mem_obj)
+        else:
+            outputs.append(mem_obj)
+    return IOBufferSet(
+        inputs,
+        outputs,
+        bindings,
+        context_wrapper.stream,
+        context_wrapper._io_thread_pool
+    )
+
 class HostDeviceMem:
     def __init__(self, host_mem, device_mem, shape):
         # keeping track of addresses
