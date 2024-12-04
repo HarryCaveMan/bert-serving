@@ -39,7 +39,10 @@ class IOBufferSet:
     @property
     def idle(self) -> bool:
         return self._taints == 0
-
+        
+    # Awaits a cuda stream event asynchronously without blocking the main event loop
+    # Currently each buffer gets its own thread because The streams I/O buffers lock independently of each other
+    # BUffers only lock when dependent on the HOST (output)buffer contents or are mutating the HOST (input)buffer 
     async def sync_cuda_event(self,event) -> None:
         await self._loop.run_in_executor(
             self._thread_pool,
@@ -48,6 +51,7 @@ class IOBufferSet:
         )
 
     def dtoh_async(self) -> None:
+        await buffers.begin_read()
         for output in self.outputs:
             cuda.memcpy_dtoh_async(
                 output.host, 
@@ -71,12 +75,12 @@ class IOBufferSet:
             self.stream.record(completion_event)
             await self.sync_cuda_event(completion_event)
         finally:
-            self._input_guard.release()
-
-    async def begin_read(self) -> None:
-        await self._output_guard.acquire()
+            self._input_guard.release()        
 
     async def pull(self,event) -> np.ndarray:
+        await self._output_guard.acquire()
+        self.dtoh_async()
+        event.record(self.stream)
         await self.sync_cuda_event(event)
         outputs = []
         try:
@@ -124,9 +128,6 @@ class TRTContextWithStreamAndBuffers:
             buffers.stream.handle,
             buffers.bindings
         )
-        await buffers.begin_read()
-        buffers.dtoh_async()
-        completion_event.record(self.stream)
         model_output = await buffers.pull(completion_event)
         buffers.clean()
         return model_output
