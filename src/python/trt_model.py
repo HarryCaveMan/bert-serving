@@ -12,7 +12,7 @@ class TRTContextWithStreamAndBuffers:
         # Multiply by two because each buffer set contains:
         #   - one set of input buffers
         #   - one set of output buffers
-        self._io_thread_pool = ThreadPoolExecutor(max_workers=num_buffer_sets*2)
+        self._io_thread_pool = ThreadPoolExecutor(max_workers=num_buffer_sets)
         self._input_guard = asyncio.Lock()
         self._output_guard = asyncio.Lock()
         self._trt_context = engine.create_execution_context()
@@ -28,15 +28,13 @@ class TRTContextWithStreamAndBuffers:
         )
     
     async def execute(self,input_data) -> np.ndarray:
-        buffers = self.get_io_buffers()
-        buffers.taint()
-        await buffers.push_one(input_data)
-        self._trt_context.enqueue_v3(
-            buffers.bindings,
-            buffers.stream.handle
-        )
-        model_output = await buffers.pull()
-        buffers.clean()
+        with self.get_io_buffers():
+            await buffers.push_one(input_data)
+            self._trt_context.enqueue_v3(
+                buffers.bindings,
+                buffers.stream.handle
+            )
+            model_output = await buffers.pull()
         return model_output
   
     @property

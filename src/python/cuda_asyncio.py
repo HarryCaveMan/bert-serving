@@ -50,10 +50,11 @@ class IOBufferSet:
         self.stream = stream
         self._taints = 0
 
-    def taint(self) -> None:
+    def __enter__(self):
         self._taints += 1
+        return self
 
-    def clean(self) -> None:
+    def __exit__(self,exc_type,exc_val,exc_tb) -> None:
         self._taints -= 1
 
     @property
