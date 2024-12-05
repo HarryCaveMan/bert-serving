@@ -4,21 +4,20 @@ import pycuda.autoinit
 import tensorrt as trt
 import asyncio
 
+CudaStream = cuda.Stream
+
 def allocate_buffers(context_wrapper):
     inputs,outputs,bindings = [],[],[]
     for binding_index in range(context_wrapper._trt_context.engine.num_bindings):
         binding_name = context_wrapper._trt_context.engine.get_binding_name(binding_index)
         shape = context_wrapper._trt_context.engine.get_binding_shape(binding_name)
-        size = trt.volume(shape)
         dtype = trt.nptype(context_wrapper._trt_context.engine.get_binding_dtype(binding_name))
-        host_mem = cuda.pagelocked_empty(size, dtype)
-        device_mem = cuda.mem_alloc(host_mem.nbytes)
-        bindings.append(int(device_mem))
-        mem_obj = HostDeviceMem(host_mem, device_mem, shape)
+        mem = HostDeviceMem(shape,dtype)
+        bindings.append(mem.binding)
         if context_wrapper._trt_context.engine.binding_is_input(binding_name):
-            inputs.append(mem_obj)
+            inputs.append(mem)
         else:
-            outputs.append(mem_obj)
+            outputs.append(mem)
     return IOBufferSet(
         inputs,
         outputs,
@@ -28,11 +27,12 @@ def allocate_buffers(context_wrapper):
     )
 
 class HostDeviceMem:
-    def __init__(self, host_mem, device_mem, shape):
-        # keeping track of addresses
-        self.host = host_mem
-        self.device = device_mem
+    def __init__(self,shape,dtype):
+        # Pagelocked host ptr and GPU(device) mem ptr
+        self.host = cuda.pagelocked_empty(trt.volume(shape), dtype)
+        self.device = cuda.mem_alloc(self.host.nbytes)
         # keeping track of shape to un-flatten it later
+        self.binding = int(self.device)
         self.shape = shape
 
 
@@ -42,6 +42,8 @@ class IOBufferSet:
         self._loop = asyncio.get_running_loop()
         self._input_guard = asyncio.Lock()
         self._output_guard = asyncio.Lock()
+        self._htod_event = cuda.Event()
+        self._dtoh_event = cuda.Event()
         self.inputs = inputs
         self.outputs = outputs
         self.bindings = bindings
@@ -89,18 +91,17 @@ class IOBufferSet:
         )
 
     async def push_one(self,input_data,input_index=0) -> None:
-        htod_event = cuda.Event()
         async with self._input_guard:
             np.copyto(self.inputs[input_index].host, input_data.ravel())
             self.htod_async(input_index)
-            self.stream.record(htpd_event)
-            await self.sync_cuda_event(htod_event)
+            self.stream.record(self._htod_event)
+            await self.sync_cuda_event(self._htod_event)
 
-    async def pull(self,event) -> np.ndarray:
+    async def pull(self) -> np.ndarray:
         async with self._output_guard:
             self.dtoh_async()
-            event.record(self.stream)
-            await self.sync_cuda_event(event)
+            self._dtoh_event.record(self.stream)
+            await self.sync_cuda_event(self._dtoh_event)
             outputs = []
             for host_device_output in self.outputs:
                 output = np.copy(host_device_output.host)  # This is a NumPy ndarray

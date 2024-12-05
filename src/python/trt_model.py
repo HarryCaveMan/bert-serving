@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import asyncio
 
-from cuda_asyncio import HostDeviceMem,IOBufferSet,allocate_buffers
+from cuda_asyncio import HostDeviceMem,IOBufferSet,allocate_buffers,CudaStream
 
 class TRTContextWithStreamAndBuffers:
     def __init__(self,engine,num_buffer_sets) -> None:
@@ -16,8 +16,8 @@ class TRTContextWithStreamAndBuffers:
         self._input_guard = asyncio.Lock()
         self._output_guard = asyncio.Lock()
         self._trt_context = engine.create_execution_context()
-        self.stream = cuda.Stream()
-        self._buffer_pool = tuple(self.allocate_buffers(self) for i in range(num_buffer_sets))
+        self.stream = CudaStream()
+        self._buffer_pool = tuple(allocate_buffers(self) for _ in range(num_buffer_sets))
 
     def get_io_buffers(self) -> IOBufferSet:
         return next(
@@ -28,7 +28,6 @@ class TRTContextWithStreamAndBuffers:
         )
     
     async def execute(self,input_data) -> np.ndarray:
-        completion_event = cuda.Event()
         buffers = self.get_io_buffers()
         buffers.taint()
         await buffers.push_one(input_data)
@@ -36,13 +35,13 @@ class TRTContextWithStreamAndBuffers:
             buffers.bindings,
             buffers.stream.handle
         )
-        model_output = await buffers.pull(completion_event)
+        model_output = await buffers.pull()
         buffers.clean()
         return model_output
   
     @property
     def idle(self):
-        return not self.stream.is_done()
+        return self.stream.is_done()
 
     @property
     def taints(self) -> int:
