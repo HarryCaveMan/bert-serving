@@ -1,0 +1,7 @@
+__pycache__
+*.pyc
+*.gz
+*.zip
+*stral*
+models
+*.txt
