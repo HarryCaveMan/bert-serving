@@ -54,7 +54,10 @@ class TRTContextWithStreamAndBuffers:
             )
             print("end await execute")
             print("start await pull")
-            model_output = await buffers.pull()
+            
+            model_output = await buffers.pull(
+                self._trt_context.get_tensor_shape(tensor_name)
+            )
             print("end await pull")
         return model_output
   
@@ -117,7 +120,10 @@ class TRTModel:
         input_tensors = self._tokenizer(
             input_data,
             truncation=True,
+            padding="longest",
             max_length=self._max_seq_len,
             return_tensors="np"
         )
+        # for tensor_name in input_tensors:
+        #     input_tensors[tensor_name] = np.vstack(input_tensors[tensor_name])
         return await executor.execute(**input_tensors)

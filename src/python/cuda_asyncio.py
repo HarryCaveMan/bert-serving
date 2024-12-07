@@ -3,7 +3,7 @@ import pycuda.driver as cuda
 import pycuda.autoinit
 import tensorrt as trt
 import asyncio
-from copy import deepcopy
+from functools import cached_property
 
 CudaStream = cuda.Stream
 CudaEvent = cuda.Event
@@ -58,7 +58,6 @@ class HostDeviceMem:
 class IOBufferSet:
     def __init__(self,inputs,outputs,bindings,stream,thread_pool) -> None:
         self._thread_pool = thread_pool
-        self._loop = asyncio.get_running_loop()
         self._input_guard = asyncio.Lock()
         self._output_guard = asyncio.Lock()
         self._htod_event = CudaEvent()
@@ -76,6 +75,10 @@ class IOBufferSet:
 
     def __exit__(self,exc_type,exc_val,exc_tb) -> None:
         self._taints -= 1
+
+    @cached_property
+    def _loop(self) -> asyncio.AbstractEventLoop:
+        return asyncio.get_event_loop()
 
     @property
     def taints(self) -> int:
@@ -126,6 +129,7 @@ class IOBufferSet:
             for tensor_name,_input in inputs.items():
                 buffer = self.inputs[tensor_name]
                 flat_input = _input.ravel()
+                print(flat_input)
                 print(tensor_name,_input.shape)
                 np.copyto(buffer.host[:flat_input.size],flat_input)
                 print(buffer.host)
@@ -136,7 +140,7 @@ class IOBufferSet:
             finally:
                 print("push complete")
 
-    async def pull(self) -> np.ndarray:
+    async def pull(self,output_shape) -> np.ndarray:
         async with self._output_guard:
             print("syncing device output buffers")
             self.dtoh_async()
@@ -145,8 +149,8 @@ class IOBufferSet:
             print("unflattening")
             outputs = {}
             for tensor_name,host_device_output in self.outputs.items():
-                output = np.copy(host_device_output.host)  # This is a NumPy ndarray
-                output = output.reshape(host_device_output.shape)  # Reshape to original tensor shape
+                output = np.copy(host_device_output.host[:trt.volume(output_shape)])  # This is a NumPy ndarray
+                output = output.reshape(output_shape)  # Reshape to original tensor shape
                 outputs[tensor_name] = output
             # shuold be the sentence embeddings not the word embedings
         # Free output lock

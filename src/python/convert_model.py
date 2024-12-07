@@ -79,7 +79,7 @@ def build_engine(
     return engine
 
 
-def convert_hf_model(model_path_or_repo_id:str,onnx_model:str,trt_model:str,max_batch_size:int,optimal_batch_size:int,seq_len_optimization_factor:int):
+def convert_hf_onnx_model(model_path_or_repo_id:str,onnx_model:str,trt_model:str,max_batch_size:int,optimal_batch_size:int,seq_len_optimization_factor:int):
     local_dir:str = model_path_or_repo_id.split("/")[0]
     Path(local_dir).absolute().mkdir(mode=0o755,parents=True,exist_ok=True)
     onnx_dir:str = f"{model_path_or_repo_id}/onnx"
