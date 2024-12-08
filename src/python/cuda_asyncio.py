@@ -39,16 +39,12 @@ def allocate_buffers(context_wrapper,model_dim):
     )
 
 class HostDeviceMem:
-    def __init__(self,shape,dtype):
+    def __init__(self,max_shape,dtype):
         # Pagelocked host ptr and GPU(device) mem ptr
-        self.host = cuda.pagelocked_empty(trt.volume(shape), dtype)
+        self.host = cuda.pagelocked_empty(trt.volume(max_shape), dtype)
         self.device = cuda.mem_alloc(self.host.nbytes)
         # keeping track of shape to un-flatten it later
         self.binding = int(self.device)
-        if isinstance(shape, trt.Dims):
-            self.shape = tuple(shape)
-        else:
-            self.shape = shape
     
     def __del__(self):
         self.host.base.free()
