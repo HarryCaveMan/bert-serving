@@ -42,10 +42,13 @@ class TRTContextWithStreamAndBuffers:
             await buffers.push(**inputs)
             print("end push")
             print("start binding")
+            output_shapes = {}
             for tensor_name,binding in buffers.bindings.items():
                 self._trt_context.set_tensor_address(tensor_name,binding)
                 if self._trt_context.engine.get_tensor_mode(tensor_name) == trt.TensorIOMode.INPUT:
                     self._trt_context.set_input_shape(tensor_name, inputs[tensor_name].shape)
+                else:
+                    output_shapes[tensor_name] = None
             print("end binding")
             print("start await execute")
             await buffers.async_exec(
@@ -54,10 +57,9 @@ class TRTContextWithStreamAndBuffers:
             )
             print("end await execute")
             print("start await pull")
-            
-            model_output = await buffers.pull(
-                self._trt_context.get_tensor_shape(tensor_name)
-            )
+            for tensor_name in output_shapes:
+                output_shapes[tensor_name] = self._trt_context.get_tensor_shape(tensor_name)
+            model_output = await buffers.pull(**output_shapes)
             print("end await pull")
         return model_output
   

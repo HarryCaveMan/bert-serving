@@ -136,7 +136,7 @@ class IOBufferSet:
             finally:
                 print("push complete")
 
-    async def pull(self,output_shape) -> np.ndarray:
+    async def pull(self,**output_shapes) -> np.ndarray:
         async with self._output_guard:
             print("syncing device output buffers")
             self.dtoh_async()
@@ -145,8 +145,8 @@ class IOBufferSet:
             print("unflattening")
             outputs = {}
             for tensor_name,host_device_output in self.outputs.items():
-                output = np.copy(host_device_output.host[:trt.volume(output_shape)])  # This is a NumPy ndarray
-                output = output.reshape(output_shape)  # Reshape to original tensor shape
+                output = np.copy(host_device_output.host[:trt.volume(output_shapes[tensor_name])])  # This is a NumPy ndarray
+                output = output.reshape(output_shape[tensor_name])  # Reshape to original tensor shape
                 outputs[tensor_name] = output
             # shuold be the sentence embeddings not the word embedings
         # Free output lock

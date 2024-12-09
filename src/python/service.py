@@ -10,7 +10,7 @@ class Request(BaseModel):
 class Response(BaseModel):
     embeddings: List[List[float]]
 
-model = TRTModel("sentence-transformers/all-MiniLM-L12-v2","sentence_transformer_model.trt",io_buffer_sets_per_stream=1)
+model = TRTModel("sentence-transformers/all-MiniLM-L12-v2","sentence_transformer_model.trt",io_buffer_sets_per_stream=4)
 
 app = FastAPI()
 
