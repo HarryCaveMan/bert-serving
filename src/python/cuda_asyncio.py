@@ -146,7 +146,7 @@ class IOBufferSet:
             outputs = {}
             for tensor_name,host_device_output in self.outputs.items():
                 output = np.copy(host_device_output.host[:trt.volume(output_shapes[tensor_name])])  # This is a NumPy ndarray
-                output = output.reshape(output_shape[tensor_name])  # Reshape to original tensor shape
+                output = output.reshape(output_shapes[tensor_name])  # Reshape to original tensor shape
                 outputs[tensor_name] = output
             # shuold be the sentence embeddings not the word embedings
         # Free output lock
