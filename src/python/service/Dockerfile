@@ -59,6 +59,6 @@ FROM cuda_base
 COPY --from=build /opt/runtime /opt/runtime
 ENV PATH=/opt/runtime/bin:$PATH
 
-COPY service.py trt_model.py cuda_asyncio.py /opt/service/
+COPY *.py /opt/service/
 
 ENTRYPOINT ["/bin/bash"]

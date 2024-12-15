@@ -2,9 +2,9 @@ ARG BASE=trt-test
 
 FROM $BASE
 
-COPY torch_requirements.txt requirements.txt
+COPY requirements.txt requirements.txt
 
 RUN dnf -y install python3.11-pip && ln /usr/bin/pip3.11 /usr/bin/pip &&\
     pip install --no-deps -r requirements.txt
 
-COPY convert_model.py test_trt.py convert_onnx.py /opt/service/
+COPY *.py /opt/service/

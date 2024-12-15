@@ -1,0 +1,4 @@
+fastapi
+uvicorn
+transformers
+tritonclient[http,grpc]

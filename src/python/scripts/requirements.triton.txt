@@ -1,0 +1,4 @@
+numpy
+tensorrt==10.6.0
+transformers
+ninja

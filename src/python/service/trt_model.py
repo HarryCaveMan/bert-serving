@@ -19,8 +19,6 @@ class TRTContextWithStreamAndBuffers:
         #   - one set of input buffers
         #   - one set of output buffers
         self._io_thread_pool = ThreadPoolExecutor(max_workers=num_buffer_sets)
-        self._input_guard = asyncio.Lock()
-        self._output_guard = asyncio.Lock()
         self._trt_context = engine.create_execution_context()
         self.stream = CudaStream()
         self._buffer_pool = tuple(allocate_buffers(self,model_dim) for _ in range(num_buffer_sets))
@@ -47,8 +45,6 @@ class TRTContextWithStreamAndBuffers:
                 self._trt_context.set_tensor_address(tensor_name,binding)
                 if self._trt_context.engine.get_tensor_mode(tensor_name) == trt.TensorIOMode.INPUT:
                     self._trt_context.set_input_shape(tensor_name, inputs[tensor_name].shape)
-                else:
-                    output_shapes[tensor_name] = None
             print("end binding")
             print("start await execute")
             await buffers.async_exec(
@@ -57,8 +53,10 @@ class TRTContextWithStreamAndBuffers:
             )
             print("end await execute")
             print("start await pull")
-            for tensor_name in output_shapes:
-                output_shapes[tensor_name] = self._trt_context.get_tensor_shape(tensor_name)
+            output_shapes = {
+                output_name:self._trt_context.get_tensor_shape(output_name) 
+                for output_name in buffers.outputs.keys()
+            }
             model_output = await buffers.pull(**output_shapes)
             print("end await pull")
         return model_output
