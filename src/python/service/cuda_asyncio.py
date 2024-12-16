@@ -34,8 +34,7 @@ def allocate_buffers(context_wrapper,model_dim):
         inputs,
         outputs,
         bindings,
-        context_wrapper.stream,
-        context_wrapper._io_thread_pool
+        context_wrapper.stream
     )
 
 class HostDeviceMem:
@@ -52,8 +51,7 @@ class HostDeviceMem:
 
 
 class IOBufferSet:
-    def __init__(self,inputs,outputs,bindings,stream,thread_pool) -> None:
-        self._thread_pool = thread_pool
+    def __init__(self,inputs,outputs,bindings,stream,asyncio_poll_interval_micros=0) -> None:
         self._input_guard = asyncio.Lock()
         self._output_guard = asyncio.Lock()
         self._htod_event = CudaEvent()
@@ -63,6 +61,7 @@ class IOBufferSet:
         self.outputs = outputs
         self.bindings = bindings
         self.stream = stream
+        self.asyncio_poll_interval_micros = asyncio_poll_interval_micros
         self._taints = 0
 
     def __enter__(self):
@@ -88,69 +87,53 @@ class IOBufferSet:
     # Currently each buffer gets its own thread because The streams I/O buffers lock independently of each other
     # CUDA streams handle synchronization of the accelerator, so locks only needed for HOST buffers
     # Buffers only lock when dependent on the HOST (output)buffer contents or while mutating the HOST (input)buffer
-    async def sync_cuda_event_or_stream(self,event_or_stream) -> None:
-        await self._loop.run_in_executor(
-            self._thread_pool,
-            event_or_stream.synchronize
-        )
+    async def sync_cuda_event_or_stream(self,event_or_stream,) -> None:
+        while True:
+            try:
+                if event_or_stream.query():
+                    break
+            finally:
+                await asyncio.sleep(self.asyncio_poll_interval_micros/1e6)
 
     def dtoh_async(self,**inputs) -> None:
         for output in self.outputs.values():
             cuda.memcpy_dtoh_async(
-                output.host, 
-                output.device, 
+                output.host,
+                output.device,
                 self.stream
             )
 
     def htod_async(self) -> None:
         for _input in self.inputs.values():
             cuda.memcpy_htod_async(
-                _input.device, 
-                _input.host, 
+                _input.device,
+                _input.host,
                 self.stream
             )
 
     async def async_exec(self,async_cuda_callable,*args,**kwargs) -> None:
         async_cuda_callable(*args,**kwargs)
         self._exec_event.record(self.stream)
-        try:
-            print("awaiting execute event")
-            await self.sync_cuda_event_or_stream(self._exec_event)
-        finally:
-            print("async exec complete")
+        await self.sync_cuda_event_or_stream(self._exec_event)
 
     async def push(self,**inputs) -> None:
         async with self._input_guard:
-            print("syncing device input buffers")
             for tensor_name,_input in inputs.items():
                 buffer = self.inputs[tensor_name]
                 flat_input = _input.ravel()
-                print(flat_input)
-                print(tensor_name,_input.shape)
                 np.copyto(buffer.host[:flat_input.size],flat_input)
-                print(buffer.host)
             self.htod_async()
             self._htod_event.record(self.stream)
-            try:
-                await self.sync_cuda_event_or_stream(self._htod_event)
-            finally:
-                print("push complete")
+            await self.sync_cuda_event_or_stream(self._htod_event)
 
     async def pull(self,**output_shapes) -> np.ndarray:
         async with self._output_guard:
-            print("syncing device output buffers")
             self.dtoh_async()
             self._dtoh_event.record(self.stream)
             await self.sync_cuda_event_or_stream(self._dtoh_event)
-            print("unflattening")
             outputs = {}
             for tensor_name,host_device_output in self.outputs.items():
                 output = np.copy(host_device_output.host[:trt.volume(output_shapes[tensor_name])])  # This is a NumPy ndarray
                 output = output.reshape(output_shapes[tensor_name])  # Reshape to original tensor shape
                 outputs[tensor_name] = output
-            # shuold be the sentence embeddings not the word embedings
-        # Free output lock
-        try:
-            return outputs
-        finally:
-            print("pull complete")
+        return outputs

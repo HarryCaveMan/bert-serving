@@ -13,18 +13,12 @@ from cuda_asyncio import (
     CudaError
 )
 
-class TRTContextWithStreamAndBuffers:
-    def __init__(self,engine,model_dim,num_buffer_sets) -> None:
-        # Multiply by two because each buffer set contains:
-        #   - one set of input buffers
-        #   - one set of output buffers
-        self._io_thread_pool = ThreadPoolExecutor(max_workers=num_buffer_sets)
-        self._trt_context = engine.create_execution_context()
+class TRTStreamWithBuffers:
+    def __init__(self,context,model_dim,num_buffer_sets) -> None:
+        self._trt_context = context._trt_context
         self.stream = CudaStream()
+        self.handle = self.stream.handle
         self._buffer_pool = tuple(allocate_buffers(self,model_dim) for _ in range(num_buffer_sets))
-
-    def __del__(self):
-        self._io_thread_pool.shutdown()
 
     def get_io_buffers(self) -> IOBufferSet:
         return next(
@@ -33,52 +27,87 @@ class TRTContextWithStreamAndBuffers:
             # default to least busy (fewest taints) if none are idle (The buffers have locking anyway)
             min(self._buffer_pool, key=lambda buffer_set: buffer_set.taints)
         )
-    
-    async def execute(self,**inputs) -> np.ndarray:
-        with self.get_io_buffers() as buffers:
-            print("start push")
-            await buffers.push(**inputs)
-            print("end push")
-            print("start binding")
-            output_shapes = {}
-            for tensor_name,binding in buffers.bindings.items():
-                self._trt_context.set_tensor_address(tensor_name,binding)
-                if self._trt_context.engine.get_tensor_mode(tensor_name) == trt.TensorIOMode.INPUT:
-                    self._trt_context.set_input_shape(tensor_name, inputs[tensor_name].shape)
-            print("end binding")
-            print("start await execute")
-            await buffers.async_exec(
-                self._trt_context.execute_async_v3,
-                self.stream.handle
-            )
-            print("end await execute")
-            print("start await pull")
-            output_shapes = {
-                output_name:self._trt_context.get_tensor_shape(output_name) 
-                for output_name in buffers.outputs.keys()
-            }
-            model_output = await buffers.pull(**output_shapes)
-            print("end await pull")
-        return model_output
-  
-    @property
-    def idle(self):
-        return self.stream.is_done()
 
     @property
     def taints(self) -> int:
         return sum(buffer_set.taints for buffer_set in self._buffer_pool)
 
+    @property
+    def idle(self) -> bool:
+        return self.taints == 0
+
+class TRTContextWithStreamAndBuffers:
+    def __init__(
+        self,
+        engine,
+        model_dim,
+        num_streams,
+        num_buffer_sets_per_stream
+    ) -> None:
+        # Multiply by two because each buffer set contains events for:
+        #   - one set of input buffers (htod)
+        #   - one set of output buffers (dtoh)
+        #   - one execution event
+        self._trt_context = engine.create_execution_context()
+        self._stream_pool = tuple(
+            TRTStreamWithBuffers(self,model_dim,num_buffer_sets_per_stream) 
+            for _ in range(num_streams)
+        )
+
+    def get_stream(self) -> IOBufferSet:
+        return next(
+            # Try for next available
+            (stream for stream in self._stream_pool if stream.idle),
+            # default to least busy (fewest taints) if none are idle (The buffers have locking anyway)
+            min(self._stream_pool, key=lambda stream: stream.taints)
+        )
+    
+    async def execute(self,**inputs) -> np.ndarray:
+        stream = self.get_stream()
+        with stream.get_io_buffers() as buffers:
+            await buffers.push(**inputs)
+            output_shapes = {}
+            for tensor_name,binding in buffers.bindings.items():
+                self._trt_context.set_tensor_address(tensor_name,binding)
+                if self._trt_context.engine.get_tensor_mode(tensor_name) == trt.TensorIOMode.INPUT:
+                    self._trt_context.set_input_shape(tensor_name, inputs[tensor_name].shape)
+            await buffers.async_exec(
+                self._trt_context.execute_async_v3,
+                stream.handle
+            )
+            output_shapes = {
+                output_name:self._trt_context.get_tensor_shape(output_name) 
+                for output_name in buffers.outputs.keys()
+            }
+            model_output = await buffers.pull(**output_shapes)
+        return model_output
+  
+    @property
+    def idle(self):
+        return self.taints == 0
+
+    @property
+    def taints(self) -> int:
+        return sum(stream.taints for stream in self._stream_pool)
+
 
 class TRTExecPool:
-    def __init__(self,engine,model_dim,num_cuda_streams,io_buffer_sets_per_stream) -> None:
+    def __init__(
+        self,
+        engine,
+        model_dim,
+        num_contexts,
+        num_streams_per_context,
+        io_buffer_sets_per_stream
+    ) -> None:
         self._execution_contexts = tuple(
             TRTContextWithStreamAndBuffers(
                 engine,
                 model_dim,
+                num_streams_per_context,
                 io_buffer_sets_per_stream
             )
-            for i in range(num_cuda_streams)
+            for i in range(num_contexts)
         )
     
     def get_execution_context(self):
@@ -102,7 +131,15 @@ class TRTModel:
         self._hf_config = AutoConfig.from_pretrained(model_path,trust_remote_code=trust_remote_code)
         self._max_seq_len = self._hf_config.max_position_embeddings
 
-    def __init__(self,model_path,trt_model,num_cuda_streams=1,io_buffer_sets_per_stream=4,**kwargs) -> None:
+    def __init__(
+        self,
+        model_path,
+        trt_model,
+        num_contexts,
+        num_cuda_streams_per_context,
+        io_buffer_sets_per_stream,
+        **kwargs
+    ) -> None:
         trust_remote_code = kwargs.get("trust_remote_code",True)
         self._logger = trt.Logger(trt.Logger.ERROR)
         self._runtime = trt.Runtime(self._logger)
@@ -111,8 +148,9 @@ class TRTModel:
         self._exec_pool = TRTExecPool(
             self._trt_engine,
             self._hf_config.hidden_size,
-            num_cuda_streams,
-            io_buffer_sets_per_stream
+            num_contexts=num_contexts,
+            num_streams_per_context=num_cuda_streams_per_context,
+            io_buffer_sets_per_stream=io_buffer_sets_per_stream
         )
 
     async def predict(self,input_data):
