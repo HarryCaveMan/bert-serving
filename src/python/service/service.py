@@ -52,6 +52,6 @@ if __name__ == "__main__":
         trt_model="model_10_7.trt",
         num_contexts=1,
         num_cuda_streams_per_context=6,
-        io_buffer_sets_per_stream=2
+        io_buffer_sets_per_stream=6
     )
     uvicorn.run(service.app, host="0.0.0.0", port=8080)

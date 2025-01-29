@@ -108,7 +108,7 @@ def add_mean_pooling_and_norm_layer(onnx_model_path: str, output_model_path: str
 model_name = "model"
 model_path_or_repo_id = "sentence-transformers/all-MiniLM-L12-v2"
 if ADD_POOLER:
-    new_model_name = "model_10_6.trt"
+    new_model_name = "model_10_7"
     add_mean_pooling_and_norm_layer(
         f"{model_path_or_repo_id}/onnx/{model_name}.onnx", 
         f"{model_path_or_repo_id}/onnx/{new_model_name}.onnx"
